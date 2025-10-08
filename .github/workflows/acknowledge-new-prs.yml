@@ -3,6 +3,7 @@ on:
   pull_request_target:
     types:
       - opened
+      - synchronize
 jobs:
   commentor:
     runs-on: ubuntu-latest
