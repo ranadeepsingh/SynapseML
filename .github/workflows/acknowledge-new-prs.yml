@@ -8,9 +8,6 @@ on:
 jobs:
   commentor:
     runs-on: ubuntu-latest
-    permissions:
-      issues: write
-      pull-requests: write
     steps:
       - name: Comment to acknowledge PRs
         uses: peter-evans/create-or-update-comment@v5
