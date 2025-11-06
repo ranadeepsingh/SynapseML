@@ -127,7 +127,7 @@ const features = [
     description: (
       <>
         <p>
-          SynapseML is Open Source and can be installed and used on any Spark 3
+          SynapseML is Open Source and can be installed and used on any Spark 4
           infrastructure including your local machine, Databricks, Synapse
           Analytics, and others.
         </p>
@@ -262,15 +262,15 @@ function Home() {
               >
                 <TabItem value="Synapse">
                   <p>SynapseML can be installed on Synapse adding the following to the first cell of a notebook:</p>
-                  For Spark3.5 pools:
+                  For Spark4.0 pools:
                   <CodeSnippet
                     snippet={`%%configure -f
 {
   "name": "synapseml",
   "conf": {
-      "spark.jars.packages": "com.microsoft.azure:synapseml_2.12:1.1.0",
+      "spark.jars.packages": "com.microsoft.azure:synapseml_2.13:1.1.0",
       "spark.jars.repositories": "https://mmlspark.azureedge.net/maven",
-      "spark.jars.excludes": "org.scala-lang:scala-reflect,org.apache.spark:spark-tags_2.12,org.scalactic:scalactic_2.12,org.scalatest:scalatest_2.12,com.fasterxml.jackson.core:jackson-databind",
+      "spark.jars.excludes": "org.scala-lang:scala-reflect,org.apache.spark:spark-tags_2.13,org.scalactic:scalactic_2.13,org.scalatest:scalatest_2.13,com.fasterxml.jackson.core:jackson-databind",
       "spark.yarn.user.classpath.first": "true",
       "spark.sql.parquet.enableVectorizedReader": "false"
   }
@@ -300,9 +300,9 @@ function Home() {
 {
   "name": "synapseml",
   "conf": {
-      "spark.jars.packages": "com.microsoft.azure:synapseml_2.12:[THE_SYNAPSEML_VERSION_YOU_WANT]",
+      "spark.jars.packages": "com.microsoft.azure:synapseml_2.13:[THE_SYNAPSEML_VERSION_YOU_WANT]",
       "spark.jars.repositories": "https://mmlspark.azureedge.net/maven",
-      "spark.jars.excludes": "org.scala-lang:scala-reflect,org.apache.spark:spark-tags_2.12,org.scalactic:scalactic_2.12,org.scalatest:scalatest_2.12,com.fasterxml.jackson.core:jackson-databind",
+      "spark.jars.excludes": "org.scala-lang:scala-reflect,org.apache.spark:spark-tags_2.13,org.scalactic:scalactic_2.13,org.scalatest:scalatest_2.13,com.fasterxml.jackson.core:jackson-databind",
       "spark.yarn.user.classpath.first": "true",
       "spark.sql.parquet.enableVectorizedReader": "false"
   }
@@ -314,9 +314,9 @@ function Home() {
                   SynapseML can be conveniently installed on existing Spark
                   clusters via the --packages option, examples:
                   <CodeSnippet
-                    snippet={`spark-shell --packages com.microsoft.azure:synapseml_2.12:1.1.0 # Please use 1.1.0 version for Spark3.5 and 1.1.0 version for Spark3.4
-pyspark --packages com.microsoft.azure:synapseml_2.12:1.1.0
-spark-submit --packages com.microsoft.azure:synapseml_2.12:1.1.0 MyApp.jar `}
+                    snippet={`spark-shell --packages com.microsoft.azure:synapseml_2.13:1.1.0 # Please use 1.1.0 version for Spark4.0 and 1.0.15 version for Spark3.4
+pyspark --packages com.microsoft.azure:synapseml_2.13:1.1.0
+spark-submit --packages com.microsoft.azure:synapseml_2.13:1.1.0 MyApp.jar `}
                     lang="bash"
                   ></CodeSnippet>
                   This can be used in other Spark contexts too. For example, you
@@ -342,9 +342,9 @@ spark-submit --packages com.microsoft.azure:synapseml_2.12:1.1.0 MyApp.jar `}
                   </p>
                   <p>
                     <p>For the coordinates:</p>
-                    Spark 3.5 Cluster:
+                    Spark 4.0 Cluster:
                     <CodeSnippet
-                      snippet={`com.microsoft.azure:synapseml_2.12:1.1.0`}
+                      snippet={`com.microsoft.azure:synapseml_2.13:1.1.0`}
                       lang="bash"
                     ></CodeSnippet>
                     Spark 3.4 Cluster:
@@ -361,7 +361,7 @@ spark-submit --packages com.microsoft.azure:synapseml_2.12:1.1.0 MyApp.jar `}
                   </p>
                   <p>
                     Finally, ensure that your Spark cluster has at least Spark
-                    3.4 and Scala 2.12.
+                    3.4 runtime.
                   </p>
                   You can use SynapseML in both your Scala and PySpark
                   notebooks. To get started with our example notebooks import
@@ -405,7 +405,7 @@ spark-submit --packages com.microsoft.azure:synapseml_2.12:1.1.0 MyApp.jar `}
                   <CodeSnippet
                     snippet={`import pyspark
 spark = (pyspark.sql.SparkSession.builder.appName("MyApp")
-        .config("spark.jars.packages", "com.microsoft.azure:synapseml_2.12:1.1.0") # Please use 1.1.0 version for Spark3.5 and 1.1.0 version for Spark3.4
+        .config("spark.jars.packages", "com.microsoft.azure:synapseml_2.13:1.1.0") # Please use 1.1.0 version for Spark4.0 and 1.0.15 version for Spark3.4
         .config("spark.jars.repositories", "https://mmlspark.azureedge.net/maven")
         .getOrCreate())
 import synapse.ml`}
@@ -417,7 +417,7 @@ import synapse.ml`}
                   following lines to your build.sbt:
                   <CodeSnippet
                     snippet={`resolvers += "SynapseML" at "https://mmlspark.azureedge.net/maven"
-libraryDependencies += "com.microsoft.azure" %% "synapseml_2.12" % "1.1.0" // Please use 1.1.0 version for Spark3.5 and 1.0.15 version for Spark3.4`}
+libraryDependencies += "com.microsoft.azure" %% "synapseml_2.13" % "1.1.0" // Please use 1.1.0 version for Spark4.0 and 1.0.15 version for Spark3.4`}
                     lang="jsx"
                   ></CodeSnippet>
                 </TabItem>

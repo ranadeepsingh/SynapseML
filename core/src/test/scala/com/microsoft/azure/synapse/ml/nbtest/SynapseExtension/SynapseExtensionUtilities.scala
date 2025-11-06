@@ -74,8 +74,8 @@ object SynapseExtensionUtilities {
     val eTag = getETagFromArtifact(artifactId)
     val store = Secrets.ArtifactStore.capitalize
     val excludes: String = "org.scala-lang:scala-reflect," +
-      "org.apache.spark:spark-tags_2.12," +
-      "org.scalatest:scalatest_2.12," +
+      "org.apache.spark:spark-tags_2.13," +
+      "org.scalatest:scalatest_2.13," +
       "org.slf4j:slf4j-api"
 
     val workloadPayload =
@@ -83,7 +83,7 @@ object SynapseExtensionUtilities {
          |"{
          |  'Default${store}ArtifactId': '$storeId',
          |  'ExecutableFile': '$path',
-         |  'SparkVersion':'3.5',
+         |  'SparkVersion':'4.0',
          |  'SparkSettings': {
          |    'spark.jars.packages' : '$SparkMavenPackageList',
          |    'spark.jars.repositories' : '$SparkMavenRepositoryList',

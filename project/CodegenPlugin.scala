@@ -300,7 +300,7 @@ object CodegenPlugin extends AutoPlugin {
       (Compile / packageBin / artifactPath).value.getParentFile
     },
     mergeCodeDir := {
-      join(baseDirectory.value.getParent, "target", "scala-2.12", "generated")
+      join(baseDirectory.value.getParent, "target", "scala-2.13", "generated")
     },
     codegenDir := {
       join(targetDir.value, "generated")

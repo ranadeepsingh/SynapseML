@@ -36,25 +36,25 @@ for a Windows x64 machine or jdk-8u231-macosx-x64.dmg for macOS. Then, use the c
 
 ### 3. Install Apache Spark
 
-[Download and install Apache Spark](https://spark.apache.org/downloads.html) with version >= 3.5.0.
-(SynapseML v1.1.0 only supports spark version >= 3.5.0)
+[Download and install Apache Spark](https://spark.apache.org/downloads.html) with version >= 4.0.0.
+(SynapseML v1.1.0 only supports spark version >= 4.0.0)
 
 Extract downloaded zipped files (with 7-Zip app on Windows or `tar` on linux) and remember the location of
-extracted files, we take `~/bin/spark-3.2.0-bin-hadoop3.2/` as an example here.
+extracted files, we take `~/bin/spark-4.0.0-bin-hadoop3/` as an example here.
 
 Run the following commands to set the environment variables used to locate Apache Spark.
 On Windows, make sure to run the command prompt in administrator mode.
 <Tabs groupId="operating-systems">
    <TabItem value="win" label="Windows" default>
 
-      setx /M HADOOP_HOME C:\bin\spark-3.2.0-bin-hadoop3.2\
-      setx /M SPARK_HOME C:\bin\spark-3.2.0-bin-hadoop3.2\
+      setx /M HADOOP_HOME C:\bin\spark-4.0.0-bin-hadoop3\
+      setx /M SPARK_HOME C:\bin\spark-4.0.0-bin-hadoop3\
       setx /M PATH "%PATH%;%HADOOP_HOME%;%SPARK_HOME%bin" # Warning: Don't run this if your path is already long as it will truncate your path to 1024 characters and potentially remove entries!
 
    </TabItem>
    <TabItem value="linux" label="Mac/Linux">
 
-      export SPARK_HOME=~/bin/spark-3.2.0-bin-hadoop3.2/
+      export SPARK_HOME=~/bin/spark-4.0.0-bin-hadoop3/
       export PATH="$SPARK_HOME/bin:$PATH"
       source ~/.bashrc
 
@@ -80,7 +80,7 @@ Extract Microsoft.Spark.Worker and remember the location.
 
 .NET for Apache Spark requires WinUtils to be installed alongside Apache Spark.
 [Download winutils.exe](https://github.com/steveloughran/winutils/blob/master/hadoop-3.0.0/bin/winutils.exe).
-Then, copy WinUtils into C:\bin\spark-3.2.0-bin-hadoop3.2\bin.
+Then, copy WinUtils into C:\bin\spark-4.0.0-bin-hadoop3\bin.
 :::note
 If you're using a different version of Hadoop, select the version of WinUtils that's compatible with your version of Hadoop. You can see the Hadoop version at the end of your Spark install folder name.
 :::
@@ -218,10 +218,10 @@ dotnet build
 Navigate to your build output directory. For example, in Windows you could run `cd bin\Debug\net5.0`.
 Use the spark-submit command to submit your application to run on Apache Spark.
 ```powershell
-spark-submit --class org.apache.spark.deploy.dotnet.DotnetRunner --packages com.microsoft.azure:synapseml_2.12:1.1.0 --master local microsoft-spark-3-2_2.12-2.1.1.jar dotnet SynapseMLApp.dll
+spark-submit --class org.apache.spark.deploy.dotnet.DotnetRunner --packages com.microsoft.azure:synapseml_2.13:1.1.0 --master local microsoft-spark-4-0_2.13-2.1.1.jar dotnet SynapseMLApp.dll
 ```
-`--packages com.microsoft.azure:synapseml_2.12:1.1.0` specifies the dependency on synapseml_2.12 version 1.1.0;
-`microsoft-spark-3-2_2.12-2.1.1.jar` specifies Microsoft.Spark version 2.1.1 and Spark version 3.2
+`--packages com.microsoft.azure:synapseml_2.13:1.1.0` specifies the dependency on synapseml_2.13 version 1.1.0;
+`microsoft-spark-4-0_2.13-2.1.1.jar` specifies Microsoft.Spark version 2.1.1 and Spark version 4.0
 :::note
 This command assumes you have downloaded Apache Spark and added it to your PATH environment variable so that you can use spark-submit.
 Otherwise, you'd have to use the full path (for example, C:\bin\apache-spark\bin\spark-submit or ~/spark/bin/spark-submit).

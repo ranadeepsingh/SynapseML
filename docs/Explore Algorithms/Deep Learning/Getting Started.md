@@ -4,7 +4,7 @@ sidebar_label: Getting Started
 ---
 
 :::note
-This is a sample with databricks 10.4.x-gpu-ml-scala2.12 runtime
+This is a sample with databricks 15.4.x-gpu-ml-scala2.13 runtime
 :::
 
 ## 1. Reinstall horovod using our prepared script
@@ -26,7 +26,7 @@ pip install synapseml==1.1.0
 
 An alternative is installing the SynapseML jar package in library management section, by adding:
 ```
-Coordinate: com.microsoft.azure:synapseml_2.12:1.1.0
+Coordinate: com.microsoft.azure:synapseml_2.13:1.1.0
 Repository: https://mmlspark.azureedge.net/maven
 ```
 :::note

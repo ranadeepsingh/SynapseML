@@ -14,9 +14,9 @@ description: R setup and example for SynapseML
 [devtools](https://github.com/hadley/devtools) installed on your
 machine.
 
-Also make sure you have Apache Spark installed. If you are using Sparklyr, you can use [spark-install](https://spark.rstudio.com/packages/sparklyr/latest/reference/spark_install.html). Be sure to specify the correct version. As of this writing, that should be version="3.2". spark_install is a bit eccentric and may install a slightly different version. Be sure that the version you get is one that you want.
+Also make sure you have Apache Spark installed. If you are using Sparklyr, you can use [spark-install](https://spark.rstudio.com/packages/sparklyr/latest/reference/spark_install.html). Be sure to specify the correct version. As of this writing, that should be version="4.0.0". spark_install is a bit eccentric and may install a slightly different version. Be sure that the version you get is one that you want.
 
-On Windows, download [WinUtils.exe](https://github.com/steveloughran/winutils/blob/master/hadoop-3.0.0/bin/winutils.exe) and copy it into the `bin` directory of your Spark installation, e.g. C:\Users\user\AppData\Local\Spark\spark-3.3.2-bin-hadoop3\bin
+On Windows, download [WinUtils.exe](https://github.com/steveloughran/winutils/blob/master/hadoop-3.0.0/bin/winutils.exe) and copy it into the `bin` directory of your Spark installation, e.g. C:\Users\user\AppData\Local\Spark\spark-4.0.0-bin-hadoop3\bin
 
 To install the current SynapseML package for R, first install synapseml-core:
 
@@ -55,7 +55,7 @@ Installing all dependencies may be time-consuming.  When complete, run:
 library(sparklyr)
 library(dplyr)
 config <- spark_config()
-config$sparklyr.defaultPackages <- "com.microsoft.azure:synapseml_2.12:1.1.0"
+config$sparklyr.defaultPackages <- "com.microsoft.azure:synapseml_2.13:1.1.0"
 sc <- spark_connect(master = "local", config = config)
 ...
 ```
@@ -138,13 +138,13 @@ to find the R files for deep-learning, run
 
 ```bash
 sbt packageR
-ls ./deep-learning/target/scala-2.12/generated/src/R/synapseml/R
+ls ./deep-learning/target/scala-2.13/generated/src/R/synapseml/R
 ```
 
 You can then run R in a terminal and install the above files directly:
 
 ```R
 ...
-devtools::install_local("./deep-learning/target/scala-2.12/generated/src/R/synapseml/R")
+devtools::install_local("./deep-learning/target/scala-2.13/generated/src/R/synapseml/R")
 ...
 ```

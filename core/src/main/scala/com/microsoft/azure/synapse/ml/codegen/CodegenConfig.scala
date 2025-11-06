@@ -77,7 +77,7 @@ case class CodegenConfig(name: String,
         |the Spark Serving project enables high throughput, sub-millisecond latency web services,
         |backed by your Spark cluster.
         |
-        |SynapseML requires Scala 2.12, Spark 3.0+, and Python 3.6+.
+        |SynapseML requires Scala 2.13, Spark 4.0+, and Python 3.8+.
         |"\""
         |
         |__version__ = "$pythonizedVersion"

@@ -7,12 +7,12 @@ import scala.xml.transform.{RewriteRule, RuleTransformer}
 import scala.xml.{Node => XmlNode, NodeSeq => XmlNodeSeq, _}
 
 val condaEnvName = "synapseml"
-val sparkVersion = "3.5.0"
+val sparkVersion = "4.0.0"
 name := "synapseml"
 ThisBuild / organization := "com.microsoft.azure"
-ThisBuild / scalaVersion := "2.12.17"
+ThisBuild / scalaVersion := "2.13.15"
 
-val scalaMajorVersion = 2.12
+val scalaMajorVersion = 2.13
 
 val excludes = Seq(
   ExclusionRule("org.apache.spark", s"spark-tags_$scalaMajorVersion"),
@@ -35,10 +35,10 @@ val extraDependencies = Seq(
   "com.jcraft" % "jsch" % "0.1.54",
   "org.apache.httpcomponents.client5" % "httpclient5" % "5.1.3",
   "org.apache.httpcomponents" % "httpmime" % "4.5.13",
-  "com.linkedin.isolation-forest" %% "isolation-forest_3.5.0" % "3.0.5"
-    exclude("com.google.protobuf", "protobuf-java") exclude("org.apache.spark", "spark-mllib_2.12")
-    exclude("org.apache.spark", "spark-core_2.12") exclude("org.apache.spark", "spark-avro_2.12")
-    exclude("org.apache.spark", "spark-sql_2.12"),
+  "com.linkedin.isolation-forest" %% "isolation-forest_4.0.0" % "3.0.5"
+    exclude("com.google.protobuf", "protobuf-java") exclude("org.apache.spark", "spark-mllib_2.13")
+    exclude("org.apache.spark", "spark-core_2.13") exclude("org.apache.spark", "spark-avro_2.13")
+    exclude("org.apache.spark", "spark-sql_2.13"),
 ).map(d => d excludeAll (excludes: _*))
 val dependencies = coreDependencies ++ extraDependencies
 
@@ -283,7 +283,7 @@ lazy val deepLearning = (project in file("deep-learning"))
   .dependsOn(core % "test->test;compile->compile", opencv % "test->test;compile->compile")
   .settings(settings ++ Seq(
     libraryDependencies ++= Seq(
-      "com.microsoft.azure" % "onnx-protobuf_2.12" % "0.9.3",
+      "com.microsoft.azure" % "onnx-protobuf_2.13" % "0.9.3",
       "com.microsoft.onnxruntime" % "onnxruntime_gpu" % "1.8.1",
       "org.apache.hadoop" % "hadoop-common" % "3.3.4" % "test",
       "org.apache.hadoop" % "hadoop-azure" % "3.3.4" % "test",
