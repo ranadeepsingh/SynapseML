@@ -121,6 +121,9 @@ module.exports = {
             ],
             copyright: `Copyright © ${new Date().getFullYear()} Microsoft.`,
         },
+        // NOTE: Algolia search-only API keys are designed to be publicly embedded in frontend code.
+        // This is a search-only key with no write access - it's safe to be public per Algolia's security model.
+        // See: https://www.algolia.com/doc/guides/security/api-keys/#search-only-api-key
         algolia: {
             appId: 'GBW8AA15RD',
             apiKey: '70a6807005c645678741ab941bb89ed8',
