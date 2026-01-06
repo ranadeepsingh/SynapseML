@@ -1,0 +1,97 @@
+# SynapseML Spark Profiles Configuration
+# This file defines the version settings for each Spark variant release.
+#
+# Usage:
+#   python tools/release/release.py version --from 1.1.0 --to 1.1.1 --spark-variant spark4.0
+#
+# Each profile defines:
+#   - spark_version: Apache Spark version
+#   - scala_version: Full Scala version
+#   - scala_major: Scala major.minor version (for artifact naming)
+#   - java_version: Minimum Java version required
+#   - python_version: Python version for conda environment
+#   - pyspark_version: PySpark package version
+#   - pyarrow_version: PyArrow version for compatibility
+#   - hadoop_version: Hadoop major version
+#   - isolation_forest_spark: Spark version suffix for isolation-forest dependency
+#   - isolation_forest_version: isolation-forest library version
+#   - branch: Git branch for this variant
+#   - tag_suffix: Suffix appended to version tags (e.g., "-spark4.0")
+
+# Default profile - Master branch with Spark 3.5
+# This is the primary release configuration
+default:
+  spark_version: "3.5.0"
+  scala_version: "2.12.17"
+  scala_major: "2.12"
+  java_version: "11"
+  python_version: "3.11.8"
+  pyspark_version: "3.5.0"
+  pyarrow_version: "10.0.1"
+  hadoop_version: "3"
+  isolation_forest_spark: "3.5.0"
+  isolation_forest_version: "3.0.5"
+  branch: "master"
+  tag_suffix: ""
+
+# Spark 3.3 - Legacy support
+spark3.3:
+  spark_version: "3.3.2"
+  scala_version: "2.12.15"
+  scala_major: "2.12"
+  java_version: "11"
+  python_version: "3.10"
+  pyspark_version: "3.3.2"
+  pyarrow_version: "10.0.1"
+  hadoop_version: "3"
+  isolation_forest_spark: "3.3.0"
+  isolation_forest_version: "3.0.5"
+  branch: "spark3.3"
+  tag_suffix: "-spark3.3"
+
+# Spark 3.4 - Synapse Analytics support
+spark3.4:
+  spark_version: "3.4.1"
+  scala_version: "2.12.17"
+  scala_major: "2.12"
+  java_version: "11"
+  python_version: "3.10"
+  pyspark_version: "3.4.1"
+  pyarrow_version: "10.0.1"
+  hadoop_version: "3"
+  isolation_forest_spark: "3.4.0"
+  isolation_forest_version: "3.0.5"
+  branch: "spark3.4"
+  tag_suffix: "-spark3.4"
+
+# Spark 3.5 - Current default (same as master)
+# Explicit profile for clarity, though "default" is equivalent
+spark3.5:
+  spark_version: "3.5.0"
+  scala_version: "2.12.17"
+  scala_major: "2.12"
+  java_version: "11"
+  python_version: "3.11.8"
+  pyspark_version: "3.5.0"
+  pyarrow_version: "10.0.1"
+  hadoop_version: "3"
+  isolation_forest_spark: "3.5.0"
+  isolation_forest_version: "3.0.5"
+  branch: "master"
+  tag_suffix: ""  # No suffix - spark3.5 is the default
+
+# Spark 4.0 - Next generation support
+# Requires Java 17, Scala 2.13
+spark4.0:
+  spark_version: "4.0.1"
+  scala_version: "2.13.16"
+  scala_major: "2.13"
+  java_version: "17"
+  python_version: "3.12.11"
+  pyspark_version: "4.0.1"
+  pyarrow_version: "22.0.0"
+  hadoop_version: "3"
+  isolation_forest_spark: "4.0.1"
+  isolation_forest_version: "4.0.7"
+  branch: "spark4.0"
+  tag_suffix: "-spark4.0"
