@@ -271,22 +271,30 @@ jobs:
           echo '##vso[task.setvariable variable=version]'$VERSION
           echo '##vso[task.setvariable variable=gittag]'$(git tag -l --points-at HEAD)
     # Build all images (runs on every build to validate Dockerfiles)
-    - bash: |
-        set -e
-        docker build \
-          --file tools/docker/demo/Dockerfile \
-          --build-arg SYNAPSEML_VERSION=$(version) \
-          --tag mmlspark-demo:$(version) \
-          .
+    - task: Docker@2
       displayName: Demo Image Build
-    - bash: |
-        set -e
-        docker build \
-          --file tools/docker/minimal/Dockerfile \
-          --build-arg SYNAPSEML_VERSION=$(version) \
-          --tag mmlspark-minimal:$(version) \
-          .
+      inputs:
+        command: build
+        repository: mmlspark-demo
+        Dockerfile: tools/docker/demo/Dockerfile
+        buildContext: $(Build.SourcesDirectory)
+        arguments: --build-arg SYNAPSEML_VERSION=$(version)
+        tags: |
+          $(version)
+        addPipelineData: true
+        addBaseImageData: true
+    - task: Docker@2
       displayName: Minimal Image Build
+      inputs:
+        command: build
+        repository: mmlspark-minimal
+        Dockerfile: tools/docker/minimal/Dockerfile
+        buildContext: $(Build.SourcesDirectory)
+        arguments: --build-arg SYNAPSEML_VERSION=$(version)
+        tags: |
+          $(version)
+        addPipelineData: true
+        addBaseImageData: true
     # Push demo and minimal when Docker publishing is enabled on master
     - task: AzureCLI@2
       condition: and(eq(variables.isMaster, true), eq('${{ parameters.publishDockerImages }}', true))
@@ -692,6 +700,10 @@ jobs:
         FLAKY: "true"
       core:
         PACKAGE: "core"
+        TEST_CLASSES: >-
+          com.microsoft.azure.synapse.ml.core.**
+          com.microsoft.azure.synapse.ml.SecretsSuite
+          com.microsoft.azure.synapse.ml.nbtest.DatabricksUtilitiesSuite
       explainers1:
         PACKAGE: "explainers.split1"
       explainers2:

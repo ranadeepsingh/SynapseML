@@ -302,10 +302,18 @@ object CodegenPlugin extends AutoPlugin {
     pyCodegen := pyCodeGenImpl.value,
     pythonIgnoreTestPath := sys.props.get("pythonIgnoreTestPath"),
     pythonSubTestPath := sys.props.get("pythonSubTestPath"),
-    preparePythonTests := Def.sequential(
-      LocalProject("core") / installPipPackage,
-      installPipPackage
-    ).value,
+    preparePythonTests := Def.taskDyn {
+      if (thisProjectRef.value.project == "core") {
+        Def.task {
+          installPipPackage.value
+        }
+      } else {
+        Def.sequential(
+          LocalProject("core") / installPipPackage,
+          installPipPackage
+        )
+      }
+    }.value,
     testPython := {
       preparePythonTests.value
       pyTestgen.value

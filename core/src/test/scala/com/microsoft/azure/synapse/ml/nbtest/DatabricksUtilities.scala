@@ -12,6 +12,7 @@ import com.microsoft.azure.synapse.ml.io.http.RESTHelpers
 import com.microsoft.azure.synapse.ml.nbtest.DatabricksUtilities.{TimeoutInMillis, monitorJob}
 import com.microsoft.azure.synapse.ml.nbtest.SprayImplicits._
 import org.apache.commons.io.IOUtils
+import org.apache.http.client.config.RequestConfig
 import org.apache.http.client.methods.{HttpGet, HttpPost, HttpRequestBase}
 import org.apache.http.entity.StringEntity
 import org.sparkproject.guava.io.BaseEncoding
@@ -41,47 +42,98 @@ object DatabricksUtilities {
   val NumWorkers = 5
   val AutoTerminationMinutes = 15
 
-  private val AadAuthType = "aad"
-  private val PatAuthType = "pat"
-  private val DatabricksAadResource = "2ff814a6-3304-4ab8-85cb-cd0e6f879c1d"
-  private val AzureManagementResource = "https://management.core.windows.net/"
+  private[nbtest] val AadAuthType = "aad"
+  private[nbtest] val PatAuthType = "pat"
+  private[nbtest] val DatabricksAadResource = "2ff814a6-3304-4ab8-85cb-cd0e6f879c1d"
+  private[nbtest] val AzureManagementResource = "https://management.core.windows.net/"
+  private[nbtest] val AadWorkspaceHost = "adb-1885762835647850.10.azuredatabricks.net"
+  private[nbtest] val AadWorkspaceResourceId =
+    "/subscriptions/e342c2c0-f844-4b18-9208-52c8c234c30e/resourceGroups/" +
+      "marhamil-mmlspark/providers/Microsoft.Databricks/workspaces/synapseml-build-adb"
   private val TokenRefreshBufferSeconds = 5 * 60L
-  private var CachedAadHeaders: Option[(Instant, Seq[(String, String)])] = None
+
+  private[nbtest] final case class WorkspaceConfig(host: String, resourceId: String)
+
+  private[nbtest] final class AadHeaderCache(
+      tokenProvider: String => Secrets.ExpiringAccessToken,
+      workspaceConfig: () => WorkspaceConfig,
+      clock: () => Instant = () => Instant.now()) {
+
+    @volatile private var cachedHeaders: Option[(Instant, Seq[(String, String)])] = None
+
+    def getValidHeaders(): Seq[(String, String)] = synchronized {
+      val config = workspaceConfig()
+      val now = clock()
+      cachedHeaders.filter { case (expiresAt, _) => hasSufficientTokenLifetime(expiresAt, now) }
+        .map(_._2)
+        .getOrElse {
+          val databricksToken = requireToken(tokenProvider(DatabricksAadResource), "Databricks")
+          val managementToken = requireToken(tokenProvider(AzureManagementResource), "Azure management")
+          val expiresAt = if (databricksToken.expiresAt.isBefore(managementToken.expiresAt)) {
+            databricksToken.expiresAt
+          } else {
+            managementToken.expiresAt
+          }
+          val headers = aadAuthHeaderValues(
+            databricksToken.value,
+            managementToken.value,
+            config.resourceId
+          )
+          cachedHeaders = Some(expiresAt -> headers)
+          headers
+        }
+    }
+
+    private def requireToken(token: Secrets.ExpiringAccessToken, name: String): Secrets.ExpiringAccessToken = {
+      if (token.value.trim.isEmpty) {
+        throw new IllegalStateException(s"$name access token was empty")
+      }
+      token
+    }
+  }
 
   private lazy val AuthType: String =
     sys.env.getOrElse("MML_ADB_AUTH_TYPE", PatAuthType).toLowerCase(Locale.ROOT)
 
-  private def requiredEnv(name: String): String = {
-    sys.env.get(name).filter(_.nonEmpty).getOrElse {
+  private def requiredEnv(environment: Map[String, String], name: String): String = {
+    environment.get(name).map(_.trim).filter(_.nonEmpty).getOrElse {
       throw new IllegalArgumentException(s"$name must be set when MML_ADB_AUTH_TYPE=$AadAuthType")
     }
   }
+
+  private[nbtest] def aadWorkspaceConfig(environment: Map[String, String]): WorkspaceConfig = {
+    val host = requiredEnv(environment, "MML_ADB_WORKSPACE_HOST")
+    val resourceId = requiredEnv(environment, "MML_ADB_WORKSPACE_RESOURCE_ID")
+    if (host != AadWorkspaceHost || resourceId != AadWorkspaceResourceId) {
+      throw new IllegalArgumentException(
+        "Databricks AAD authentication is restricted to the trusted SynapseML build workspace")
+    }
+    WorkspaceConfig(host, resourceId)
+  }
+
+  private lazy val TrustedAadWorkspace = aadWorkspaceConfig(sys.env)
 
   private[nbtest] def hasSufficientTokenLifetime(expiresAt: Instant, now: Instant): Boolean = {
     expiresAt.isAfter(now.plusSeconds(TokenRefreshBufferSeconds))
   }
 
-  private def aadAuthHeaders: Seq[(String, String)] = synchronized {
-    val now = Instant.now()
-    CachedAadHeaders.filter { case (expiresAt, _) => hasSufficientTokenLifetime(expiresAt, now) }
-      .map(_._2)
-      .getOrElse {
-        val databricksToken = Secrets.getAccessTokenWithExpiry(DatabricksAadResource)
-        val managementToken = Secrets.getAccessTokenWithExpiry(AzureManagementResource)
-        val expiresAt = if (databricksToken.expiresAt.isBefore(managementToken.expiresAt)) {
-          databricksToken.expiresAt
-        } else {
-          managementToken.expiresAt
-        }
-        val headers = Seq(
-          "Authorization" -> s"Bearer ${databricksToken.value}",
-          "X-Databricks-Azure-SP-Management-Token" -> managementToken.value,
-          "X-Databricks-Azure-Workspace-Resource-Id" -> requiredEnv("MML_ADB_WORKSPACE_RESOURCE_ID")
-        )
-        CachedAadHeaders = Some(expiresAt -> headers)
-        headers
-      }
+  private[nbtest] def aadAuthHeaderValues(
+      databricksToken: String,
+      managementToken: String,
+      resourceId: String): Seq[(String, String)] = {
+    Seq(
+      "Authorization" -> s"Bearer $databricksToken",
+      "X-Databricks-Azure-SP-Management-Token" -> managementToken,
+      "X-Databricks-Azure-Workspace-Resource-Id" -> resourceId
+    )
   }
+
+  private val AadHeaders = new AadHeaderCache(
+    Secrets.getAccessTokenWithExpiry,
+    () => TrustedAadWorkspace
+  )
+
+  private def aadAuthHeaders: Seq[(String, String)] = AadHeaders.getValidHeaders()
 
   private lazy val PatAuthHeaders: Seq[(String, String)] = {
     val token = sys.env.getOrElse("MML_ADB_TOKEN", Secrets.AdbToken)
@@ -90,15 +142,28 @@ object DatabricksUtilities {
     Seq("Authorization" -> authValue)
   }
 
-  private def authHeaders: Seq[(String, String)] = AuthType match {
-    case AadAuthType => aadAuthHeaders
-    case PatAuthType => PatAuthHeaders
+  private[nbtest] def selectAuthHeaders(
+      authType: String,
+      aadHeaders: => Seq[(String, String)],
+      patHeaders: => Seq[(String, String)]): Seq[(String, String)] = authType match {
+    case AadAuthType => aadHeaders
+    case PatAuthType => patHeaders
     case other =>
       throw new IllegalArgumentException(
         s"Unsupported MML_ADB_AUTH_TYPE '$other'. Expected '$AadAuthType' or '$PatAuthType'.")
   }
 
+  private def authHeaders: Seq[(String, String)] = {
+    selectAuthHeaders(AuthType, aadAuthHeaders, PatAuthHeaders)
+  }
+
+  private[nbtest] def disableRedirects(request: HttpRequestBase): Unit = {
+    val currentConfig = Option(request.getConfig).getOrElse(RESTHelpers.RequestConfigVal)
+    request.setConfig(RequestConfig.copy(currentConfig).setRedirectsEnabled(false).build())
+  }
+
   private def addAuthHeaders(request: HttpRequestBase): Unit = {
+    disableRedirects(request)
     authHeaders.foreach { case (name, value) => request.addHeader(name, value) }
   }
 
@@ -131,15 +196,18 @@ object DatabricksUtilities {
     "pytesseract"
   )
 
-  def baseURL(apiVersion: String): String = {
-    val host = AuthType match {
-      case AadAuthType => requiredEnv("MML_ADB_WORKSPACE_HOST")
+  private[nbtest] def workspaceHost(authType: String, aadHost: => String): String = {
+    authType match {
+      case AadAuthType => aadHost
       case PatAuthType => s"$Region.azuredatabricks.net"
       case other =>
         throw new IllegalArgumentException(
           s"Unsupported MML_ADB_AUTH_TYPE '$other'. Expected '$AadAuthType' or '$PatAuthType'.")
     }
-    s"https://$host/api/$apiVersion/"
+  }
+
+  def baseURL(apiVersion: String): String = {
+    s"https://${workspaceHost(AuthType, TrustedAadWorkspace.host)}/api/$apiVersion/"
   }
 
   val Libraries: String = (
