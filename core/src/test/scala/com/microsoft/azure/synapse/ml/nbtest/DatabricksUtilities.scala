@@ -19,7 +19,7 @@ import spray.json.DefaultJsonProtocol._
 import spray.json.{JsArray, JsObject, JsValue, _}
 
 import java.io.{File, FileInputStream}
-import java.time.LocalDateTime
+import java.time.{Instant, LocalDateTime}
 import java.util.Locale
 import java.util.concurrent.{Executors, TimeUnit, TimeoutException}
 import scala.collection.mutable
@@ -45,6 +45,8 @@ object DatabricksUtilities {
   private val PatAuthType = "pat"
   private val DatabricksAadResource = "2ff814a6-3304-4ab8-85cb-cd0e6f879c1d"
   private val AzureManagementResource = "https://management.core.windows.net/"
+  private val TokenRefreshBufferSeconds = 5 * 60L
+  private var CachedAadHeaders: Option[(Instant, Seq[(String, String)])] = None
 
   private lazy val AuthType: String =
     sys.env.getOrElse("MML_ADB_AUTH_TYPE", PatAuthType).toLowerCase(Locale.ROOT)
@@ -55,25 +57,49 @@ object DatabricksUtilities {
     }
   }
 
-  private lazy val AuthHeaders: Seq[(String, String)] = AuthType match {
-    case AadAuthType =>
-      Seq(
-        "Authorization" -> s"Bearer ${Secrets.getAccessToken(DatabricksAadResource)}",
-        "X-Databricks-Azure-SP-Management-Token" -> Secrets.getAccessToken(AzureManagementResource),
-        "X-Databricks-Azure-Workspace-Resource-Id" -> requiredEnv("MML_ADB_WORKSPACE_RESOURCE_ID")
-      )
-    case PatAuthType =>
-      val token = sys.env.getOrElse("MML_ADB_TOKEN", Secrets.AdbToken)
-      val authValue = "Basic " + BaseEncoding.base64()
-        .encode(("token:" + token).getBytes("UTF-8"))
-      Seq("Authorization" -> authValue)
+  private[nbtest] def hasSufficientTokenLifetime(expiresAt: Instant, now: Instant): Boolean = {
+    expiresAt.isAfter(now.plusSeconds(TokenRefreshBufferSeconds))
+  }
+
+  private def aadAuthHeaders: Seq[(String, String)] = synchronized {
+    val now = Instant.now()
+    CachedAadHeaders.filter { case (expiresAt, _) => hasSufficientTokenLifetime(expiresAt, now) }
+      .map(_._2)
+      .getOrElse {
+        val databricksToken = Secrets.getAccessTokenWithExpiry(DatabricksAadResource)
+        val managementToken = Secrets.getAccessTokenWithExpiry(AzureManagementResource)
+        val expiresAt = if (databricksToken.expiresAt.isBefore(managementToken.expiresAt)) {
+          databricksToken.expiresAt
+        } else {
+          managementToken.expiresAt
+        }
+        val headers = Seq(
+          "Authorization" -> s"Bearer ${databricksToken.value}",
+          "X-Databricks-Azure-SP-Management-Token" -> managementToken.value,
+          "X-Databricks-Azure-Workspace-Resource-Id" -> requiredEnv("MML_ADB_WORKSPACE_RESOURCE_ID")
+        )
+        CachedAadHeaders = Some(expiresAt -> headers)
+        headers
+      }
+  }
+
+  private lazy val PatAuthHeaders: Seq[(String, String)] = {
+    val token = sys.env.getOrElse("MML_ADB_TOKEN", Secrets.AdbToken)
+    val authValue = "Basic " + BaseEncoding.base64()
+      .encode(("token:" + token).getBytes("UTF-8"))
+    Seq("Authorization" -> authValue)
+  }
+
+  private def authHeaders: Seq[(String, String)] = AuthType match {
+    case AadAuthType => aadAuthHeaders
+    case PatAuthType => PatAuthHeaders
     case other =>
       throw new IllegalArgumentException(
         s"Unsupported MML_ADB_AUTH_TYPE '$other'. Expected '$AadAuthType' or '$PatAuthType'.")
   }
 
   private def addAuthHeaders(request: HttpRequestBase): Unit = {
-    AuthHeaders.foreach { case (name, value) => request.addHeader(name, value) }
+    authHeaders.foreach { case (name, value) => request.addHeader(name, value) }
   }
 
   lazy val PoolId: String = getPoolIdByName(PoolName)
