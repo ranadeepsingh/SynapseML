@@ -278,7 +278,7 @@ jobs:
         repository: mmlspark-demo
         Dockerfile: tools/docker/demo/Dockerfile
         buildContext: $(Build.SourcesDirectory)
-        arguments: --build-arg SYNAPSEML_VERSION=$(version)
+        arguments: --quiet --build-arg SYNAPSEML_VERSION=$(version)
         tags: |
           $(version)
         addPipelineData: true
@@ -290,7 +290,7 @@ jobs:
         repository: mmlspark-minimal
         Dockerfile: tools/docker/minimal/Dockerfile
         buildContext: $(Build.SourcesDirectory)
-        arguments: --build-arg SYNAPSEML_VERSION=$(version)
+        arguments: --quiet --build-arg SYNAPSEML_VERSION=$(version)
         tags: |
           $(version)
         addPipelineData: true
@@ -363,6 +363,7 @@ jobs:
       - task: Cache@2
         displayName: Use cached Anaconda environment
         condition: and(eq(variables.isMaster, true), startsWith(variables['tag'], 'v'))
+        continueOnError: true
         inputs:
           key: 'conda | "$(Agent.OS)" | environment.yml'
           restoreKeys: |
@@ -371,8 +372,10 @@ jobs:
           path: $(CONDA_CACHE_DIR)
           cacheHitVar: CONDA_CACHE_RESTORED
       - bash: |
-          conda env create --force -f environment.yml -v
-        condition: and(eq(variables.isMaster, true), and(startsWith(variables['tag'], 'v'), eq(variables.CONDA_CACHE_RESTORED, 'false')))
+          set -e
+          conda env remove --name synapseml --yes || true
+          conda env create --yes -f environment.yml -v
+        condition: and(eq(variables.isMaster, true), and(startsWith(variables['tag'], 'v'), ne(variables.CONDA_CACHE_RESTORED, 'true')))
         displayName: Create Anaconda environment
       - task: AzureKeyVault@2
         condition: and(eq(variables.isMaster, true), startsWith(variables['tag'], 'v'))
