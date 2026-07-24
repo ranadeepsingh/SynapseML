@@ -168,7 +168,7 @@ jobs:
 - job: DatabricksE2E
   displayName: 'Databricks E2E'
   condition: eq('${{ parameters.testDatabricksE2E }}', true)
-  timeoutInMinutes: 120
+  timeoutInMinutes: 180
   cancelTimeoutInMinutes: 0
   pool:
     vmImage: $(UBUNTU_VERSION)
@@ -188,12 +188,8 @@ jobs:
         TEST-CLASS: "com.microsoft.azure.synapse.ml.nbtest.DatabricksCPUTests4"
       databricks-cpu-5:
         TEST-CLASS: "com.microsoft.azure.synapse.ml.nbtest.DatabricksCPUTests5"
-      databricks-gpu-1:
-        TEST-CLASS: "com.microsoft.azure.synapse.ml.nbtest.DatabricksGPUTests1"
-      databricks-gpu-2:
-        TEST-CLASS: "com.microsoft.azure.synapse.ml.nbtest.DatabricksGPUTests2"
-      databricks-gpu-3:
-        TEST-CLASS: "com.microsoft.azure.synapse.ml.nbtest.DatabricksGPUTests3"
+      databricks-gpu:
+        TEST-CLASS: "com.microsoft.azure.synapse.ml.nbtest.DatabricksGPUTests"
 #      databricks-rapids tests have been disabled because these tests are failing.
 #      This test will be re-enabled once the issue is fixed.
 #      databricks-rapids:

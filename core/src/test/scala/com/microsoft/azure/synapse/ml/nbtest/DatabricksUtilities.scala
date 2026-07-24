@@ -189,8 +189,8 @@ object DatabricksUtilities {
     .filterNot(_.getAbsolutePath.contains("Flooding Risk")) // Azure Maps Spatial API retired 9/30/2025
     .filterNot(_.getAbsolutePath.contains("Geospatial Services")) // Azure Maps Spatial API retired 9/30/2025
 
-  // Split CPU notebooks into 3 partitions for parallel ADO matrix jobs.
-  // Each partition creates its own cluster, so all 3 run simultaneously.
+  // Split CPU notebooks into 5 partitions for parallel ADO matrix jobs.
+  // Each partition creates its own cluster, so all 5 run simultaneously.
   // Sort by absolute path for stable, deterministic partitioning across machines.
   private val SortedCPUNotebooks = CPUNotebooks.sortBy(_.getAbsolutePath)
   val NumCPUPartitions = 5
@@ -200,11 +200,9 @@ object DatabricksUtilities {
 
   val GPUNotebooks: Seq[File] = ParallelizableNotebooks.filter { file =>
     file.getAbsolutePath.contains("Fine-tune") || file.getAbsolutePath.contains("Phi Model")
-  }
+  }.sortBy(_.getAbsolutePath)
 
-  private val SortedGPUNotebooks = GPUNotebooks.sortBy(_.getAbsolutePath)
-
-  def gpuNotebook(index: Int): Seq[File] = Seq(SortedGPUNotebooks(index))
+  def gpuNotebook(index: Int): Seq[File] = Seq(GPUNotebooks(index))
 
   val RapidsNotebooks: Seq[File] = ParallelizableNotebooks.filter(_.getAbsolutePath.contains("GPU"))
 
@@ -287,8 +285,26 @@ object DatabricksUtilities {
                           numWorkers: Int,
                           poolId: String,
                           initScripts: String = "[]",
-                          memory: Option[String] = None): String = {
+                          memory: Option[String] = None,
+                          driverInstancePoolId: Option[String] = None): String = {
+    databricksPost("clusters/create", createClusterRequest(
+      clusterName,
+      sparkVersion,
+      numWorkers,
+      poolId,
+      initScripts,
+      memory,
+      driverInstancePoolId
+    )).select[String]("cluster_id")
+  }
 
+  private[nbtest] def createClusterRequest(clusterName: String,
+                                           sparkVersion: String,
+                                           numWorkers: Int,
+                                           poolId: String,
+                                           initScripts: String = "[]",
+                                           memory: Option[String] = None,
+                                           driverInstancePoolId: Option[String] = None): String = {
     val memoryConf = memory.map { m =>
       s"""
          |"spark.executor.memory": "$m",
@@ -296,25 +312,28 @@ object DatabricksUtilities {
          |""".stripMargin
     }.getOrElse("")
 
-    val body =
-      s"""
-         |{
-         |  "cluster_name": "$clusterName",
-         |  "spark_version": "$sparkVersion",
-         |  "num_workers": $numWorkers,
-         |  "autotermination_minutes": $AutoTerminationMinutes,
-         |  "instance_pool_id": "$poolId",
-         |  "spark_conf": {
-         |        $memoryConf
-         |        "spark.sql.shuffle.partitions": "auto"
-         |  },
-         |  "spark_env_vars": {
-         |     "PYSPARK_PYTHON": "/databricks/python3/bin/python3"
-         |   },
-         |  "init_scripts": $initScripts
-         |}
-      """.stripMargin
-    databricksPost("clusters/create", body).select[String]("cluster_id")
+    val driverPoolConf = driverInstancePoolId
+      .map(id => s""""driver_instance_pool_id": "$id",""")
+      .getOrElse("")
+
+    s"""
+      |{
+      |  "cluster_name": "$clusterName",
+      |  "spark_version": "$sparkVersion",
+      |  "num_workers": $numWorkers,
+      |  "autotermination_minutes": $AutoTerminationMinutes,
+      |  "instance_pool_id": "$poolId",
+      |  $driverPoolConf
+      |  "spark_conf": {
+      |        $memoryConf
+      |        "spark.sql.shuffle.partitions": "auto"
+      |  },
+      |  "spark_env_vars": {
+      |     "PYSPARK_PYTHON": "/databricks/python3/bin/python3"
+      |   },
+      |  "init_scripts": $initScripts
+      |}
+     """.stripMargin
   }
 
   def installLibraries(clusterId: String, libraries: String): Unit = {
@@ -555,7 +574,7 @@ abstract class DatabricksTestHelper extends TestBase {
     }
     futures.zip(notebooks).foreach { case (f, nb) =>
       test(nb.getName) {
-        Await.result(f, Duration(timeoutMs.toLong, TimeUnit.MILLISECONDS))
+        Await.result(f, Duration(timeoutMs.toLong + 2 * 60 * 1000, TimeUnit.MILLISECONDS))
       }
     }
 
