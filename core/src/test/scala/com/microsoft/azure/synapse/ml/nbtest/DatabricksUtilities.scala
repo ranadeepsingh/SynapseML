@@ -12,7 +12,7 @@ import com.microsoft.azure.synapse.ml.io.http.RESTHelpers
 import com.microsoft.azure.synapse.ml.nbtest.DatabricksUtilities.{TimeoutInMillis, monitorJob}
 import com.microsoft.azure.synapse.ml.nbtest.SprayImplicits._
 import org.apache.commons.io.IOUtils
-import org.apache.http.client.methods.{HttpGet, HttpPost}
+import org.apache.http.client.methods.{HttpGet, HttpPost, HttpRequestBase}
 import org.apache.http.entity.StringEntity
 import org.sparkproject.guava.io.BaseEncoding
 import spray.json.DefaultJsonProtocol._
@@ -20,6 +20,7 @@ import spray.json.{JsArray, JsObject, JsValue, _}
 
 import java.io.{File, FileInputStream}
 import java.time.LocalDateTime
+import java.util.Locale
 import java.util.concurrent.{Executors, TimeUnit, TimeoutException}
 import scala.collection.mutable
 import scala.concurrent.duration.Duration
@@ -40,9 +41,40 @@ object DatabricksUtilities {
   val NumWorkers = 5
   val AutoTerminationMinutes = 15
 
-  lazy val Token: String = sys.env.getOrElse("MML_ADB_TOKEN", Secrets.AdbToken)
-  lazy val AuthValue: String = "Basic " + BaseEncoding.base64()
-    .encode(("token:" + Token).getBytes("UTF-8"))
+  private val AadAuthType = "aad"
+  private val PatAuthType = "pat"
+  private val DatabricksAadResource = "2ff814a6-3304-4ab8-85cb-cd0e6f879c1d"
+  private val AzureManagementResource = "https://management.core.windows.net/"
+
+  private lazy val AuthType: String =
+    sys.env.getOrElse("MML_ADB_AUTH_TYPE", PatAuthType).toLowerCase(Locale.ROOT)
+
+  private def requiredEnv(name: String): String = {
+    sys.env.get(name).filter(_.nonEmpty).getOrElse {
+      throw new IllegalArgumentException(s"$name must be set when MML_ADB_AUTH_TYPE=$AadAuthType")
+    }
+  }
+
+  private lazy val AuthHeaders: Seq[(String, String)] = AuthType match {
+    case AadAuthType =>
+      Seq(
+        "Authorization" -> s"Bearer ${Secrets.getAccessToken(DatabricksAadResource)}",
+        "X-Databricks-Azure-SP-Management-Token" -> Secrets.getAccessToken(AzureManagementResource),
+        "X-Databricks-Azure-Workspace-Resource-Id" -> requiredEnv("MML_ADB_WORKSPACE_RESOURCE_ID")
+      )
+    case PatAuthType =>
+      val token = sys.env.getOrElse("MML_ADB_TOKEN", Secrets.AdbToken)
+      val authValue = "Basic " + BaseEncoding.base64()
+        .encode(("token:" + token).getBytes("UTF-8"))
+      Seq("Authorization" -> authValue)
+    case other =>
+      throw new IllegalArgumentException(
+        s"Unsupported MML_ADB_AUTH_TYPE '$other'. Expected '$AadAuthType' or '$PatAuthType'.")
+  }
+
+  private def addAuthHeaders(request: HttpRequestBase): Unit = {
+    AuthHeaders.foreach { case (name, value) => request.addHeader(name, value) }
+  }
 
   lazy val PoolId: String = getPoolIdByName(PoolName)
   lazy val GpuPoolId: String = getPoolIdByName(GpuPoolName)
@@ -73,7 +105,16 @@ object DatabricksUtilities {
     "pytesseract"
   )
 
-  def baseURL(apiVersion: String): String = s"https://$Region.azuredatabricks.net/api/$apiVersion/"
+  def baseURL(apiVersion: String): String = {
+    val host = AuthType match {
+      case AadAuthType => requiredEnv("MML_ADB_WORKSPACE_HOST")
+      case PatAuthType => s"$Region.azuredatabricks.net"
+      case other =>
+        throw new IllegalArgumentException(
+          s"Unsupported MML_ADB_AUTH_TYPE '$other'. Expected '$AadAuthType' or '$PatAuthType'.")
+    }
+    s"https://$host/api/$apiVersion/"
+  }
 
   val Libraries: String = (
     List(Map("maven" -> Map("coordinates" -> PackageMavenCoordinate, "repo" -> PackageRepository))) ++
@@ -143,7 +184,7 @@ object DatabricksUtilities {
 
   def databricksGet(path: String, apiVersion: String = "2.0"): JsValue = {
     val request = new HttpGet(baseURL(apiVersion) + path)
-    request.addHeader("Authorization", AuthValue)
+    addAuthHeaders(request)
     val random = new Random() // Use a jittered retry to avoid overwhelming
     RESTHelpers.sendAndParseJson(request, backoffs = List.fill(3) {
       1000 + random.nextInt(1000)
@@ -153,7 +194,7 @@ object DatabricksUtilities {
   //TODO convert all this to typed code
   def databricksPost(path: String, body: String, apiVersion: String = "2.0"): JsValue = {
     val request = new HttpPost(baseURL(apiVersion) + path)
-    request.addHeader("Authorization", AuthValue)
+    addAuthHeaders(request)
     request.setEntity(new StringEntity(body))
     RESTHelpers.sendAndParseJson(request)
   }
