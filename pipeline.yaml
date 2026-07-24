@@ -285,46 +285,36 @@ jobs:
         buildContext: "."
         Dockerfile: 'tools/docker/minimal/Dockerfile'
         arguments: --build-arg SYNAPSEML_VERSION=$(version) -t mmlspark-minimal:$(version)
-    # Push demo and minimal on every master build
-    - bash: |
-        set -e
-        docker tag mmlspark-demo:$(version) mmlsparkmcr.azurecr.io/public/mmlspark/build-demo:$(version)
-        docker tag mmlspark-minimal:$(version) mmlsparkmcr.azurecr.io/public/mmlspark/build-minimal:$(version)
+    # Push demo and minimal when Docker publishing is enabled on master
+    - task: AzureCLI@2
       condition: and(eq(variables.isMaster, true), eq('${{ parameters.publishDockerImages }}', true))
-      displayName: Tag Dev Images for ACR
-    - task: Docker@2
-      condition: and(eq(variables.isMaster, true), eq('${{ parameters.publishDockerImages }}', true))
-      displayName: Demo Image Push
+      displayName: Push Dev Images to ACR
       inputs:
-        containerRegistry: 'SynapseML MCR'
-        repository: 'public/mmlspark/build-demo'
-        command: 'push'
-        tags: $(version)
-    - task: Docker@2
-      condition: and(eq(variables.isMaster, true), eq('${{ parameters.publishDockerImages }}', true))
-      displayName: Minimal Image Push
-      inputs:
-        containerRegistry: 'SynapseML MCR'
-        repository: 'public/mmlspark/build-minimal'
-        command: 'push'
-        tags: $(version)
+        azureSubscription: 'SynapseML Build'
+        scriptLocation: inlineScript
+        scriptType: bash
+        inlineScript: |
+          set -e
+          az acr login --name mmlsparkmcr
+          docker tag mmlspark-demo:$(version) mmlsparkmcr.azurecr.io/public/mmlspark/build-demo:$(version)
+          docker tag mmlspark-minimal:$(version) mmlsparkmcr.azurecr.io/public/mmlspark/build-minimal:$(version)
+          docker push mmlsparkmcr.azurecr.io/public/mmlspark/build-demo:$(version)
+          docker push mmlsparkmcr.azurecr.io/public/mmlspark/build-minimal:$(version)
     # Push release only on tagged releases
-    - bash: |
-        set -e
-        docker tag mmlspark-demo:$(version) mmlsparkmcr.azurecr.io/public/mmlspark/release:$(version)
-        docker tag mmlspark-demo:$(version) mmlsparkmcr.azurecr.io/public/mmlspark/release:latest
+    - task: AzureCLI@2
       condition: and(eq('${{ parameters.publishDockerImages }}', true), eq(variables.isMaster, true), startsWith(variables['gittag'], 'v'))
-      displayName: Tag Release Image for ACR
-    - task: Docker@2
-      condition: and(eq('${{ parameters.publishDockerImages }}', true), eq(variables.isMaster, true), startsWith(variables['gittag'], 'v'))
-      displayName: Release Image Push
+      displayName: Push Release Image to ACR
       inputs:
-        containerRegistry: 'SynapseML MCR'
-        repository: 'public/mmlspark/release'
-        command: 'push'
-        tags: |
-          $(version)
-          latest
+        azureSubscription: 'SynapseML Build'
+        scriptLocation: inlineScript
+        scriptType: bash
+        inlineScript: |
+          set -e
+          az acr login --name mmlsparkmcr
+          docker tag mmlspark-demo:$(version) mmlsparkmcr.azurecr.io/public/mmlspark/release:$(version)
+          docker tag mmlspark-demo:$(version) mmlsparkmcr.azurecr.io/public/mmlspark/release:latest
+          docker push mmlsparkmcr.azurecr.io/public/mmlspark/release:$(version)
+          docker push mmlsparkmcr.azurecr.io/public/mmlspark/release:latest
     - task: ComponentGovernanceComponentDetection@0
 
 - ${{ if eq(parameters.publishRelease, true) }}:
