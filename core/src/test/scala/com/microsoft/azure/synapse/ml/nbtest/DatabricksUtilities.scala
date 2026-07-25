@@ -35,7 +35,7 @@ object DatabricksUtilities {
   // ADB Info
   val Region = "eastus"
   val PoolName = "synapseml-build-14.3"
-  val GpuPoolName = "synapseml-build-14.3-gpu"
+  val GpuPoolName = "synapseml-build-14.3-gpu-t4"
   val AdbRuntime = "14.3.x-scala2.12"
   // https://docs.databricks.com/en/release-notes/runtime/14.3lts-ml.html
   val AdbGpuRuntime = "14.3.x-gpu-ml-scala2.12"
