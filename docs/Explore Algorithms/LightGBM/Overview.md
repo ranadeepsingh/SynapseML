@@ -80,6 +80,26 @@ predictions = model.transform(test)
 set `objective="multiclass"` or `objective="multiclassova"` on a single
 `LightGBMClassifier` instead.
 
+### Multiclass SHAP values
+
+For `objective="multiclass"` with more than two classes, `featuresShapCol` is one
+flat vector containing a block for each output class. Each block has one
+contribution per encoded feature followed by a bias value. Use the fitted
+model's `getBoosterNumClasses()` and `getBoosterNumFeatures()` to determine the
+shape; counting the original columns is insufficient after one-hot encoding.
+
+The [multiclass SHAP tutorial](./Multiclass%20SHAP%20values.md) demonstrates the
+layout, raw-score reconstruction, and per-class mean absolute contributions for
+numeric and one-hot encoded categorical features. These are explanations of
+model scores, not probabilities or causal effects.
+
+### Importing a Python-trained model
+
+The [Python model inputs guide](./Python%20model%20inputs.md) explains how to
+preserve feature order, categorical encodings and missing values when using
+`LightGBMBooster.score` / `predictLeaf` or an imported PySpark model. A new
+`StringIndexer` fit is not a substitute for the Python training mapping.
+
 ### Arguments/Parameters
 
 SynapseML exposes getters/setters for many common LightGBM parameters.
@@ -169,12 +189,59 @@ arbitrary failures after native training starts.
 Streaming ingestion allocates thread slots for partitions on each executor,
 including empty local partitions, rather than for every partition in the cluster.
 With `verbosity=2`, executor logs include the local partition IDs, row count, and
-external-thread count passed to native initialization. These ingestion threads
-are distinct from the native training threads controlled by `numThreads`. When
-`numThreads` and `maxStreamingOMPThreads` are positive, streaming allocation
-uses at least `numThreads` OpenMP slots. With automatic `numThreads` or a
-nonpositive `maxStreamingOMPThreads`, the LightGBM runtime allocates against
-its actual OpenMP team size instead of relying on a fixed configured limit.
+external-thread count and `allocationBound` passed to native initialization. These ingestion threads
+are distinct from the native training threads controlled by `numThreads`.
+The fixed allocation bound uses at least 16 OpenMP slots and is raised to cover a
+positive `maxStreamingOMPThreads` hint, a positive `numThreads`, the process
+OpenMP team derived from `OMP_NUM_THREADS` or, on Linux, process CPU affinity,
+and positive `num_threads` values or aliases (`num_thread`, `nthread`,
+`nthreads`, or `n_jobs`) that SynapseML previously passed to LightGBM in the
+same executor JVM. If conflicting thread keys are supplied, SynapseML registers
+their maximum as a conservative allocation bound even when LightGBM selects a
+smaller value by its precedence rules. Native auto-sizing, logged as `allocationBound=-1`,
+is used only for one pushing thread when dataset initialization requests a nonpositive
+native thread count and OpenMP dynamic teams are disabled. A positive initialization count can
+narrow that thread's team before lazy upstream LightGBM prediction restores the process
+default; dynamic teams can also grow between pushes. Those cases retain the fixed bound.
+`OMP_DYNAMIC_ALL` is considered when `OMP_DYNAMIC` is absent. A value other than
+`true` or `false`, ignoring case and standard whitespace, warns and selects fixed
+allocation conservatively. This also covers runtime-specific true spellings.
+The whole `OMP_NUM_THREADS` list must be valid before its first value is used.
+If it is absent or invalid, a valid `OMP_NUM_THREADS_ALL` can raise the affinity
+or processor-count fallback, but cannot lower it because older runtimes ignore
+`_ALL`. Control characters other than standard whitespace are not trimmed into
+valid numbers. A valid unsuffixed value takes precedence over `_ALL`.
+When a fixed bound is needed and neither environment nor Linux-affinity source is available, SynapseML
+uses the best-effort maximum of the OS-reported and JVM-reported processor
+counts with the 16-thread floor. These detected counts are hints, not a proved
+upper bound on every native team. Linux process affinity can also differ from
+an OpenMP team's width after thread binding. A nonpositive hint does not disable
+the fixed safety bound, and the value is not a cap on the OpenMP team.
+Numeric thread-count settings parsed for allocation must fit in a signed 32-bit
+integer. Larger values fail explicitly instead of relying on native integer truncation.
+On Linux with the published native library's GNU OpenMP runtime, when
+`OMP_THREAD_LIMIT` is a positive decimal integer within the signed 32-bit range,
+it limits the fixed allocation width above the 16-slot floor. That runtime cannot form
+a team wider than this limit, even if a previous fit requested more threads.
+The registered history is retained, but it cannot force a larger allocation while
+this limit applies. Unsupported limit syntax, including a leading `+`, is not used
+as a ceiling and produces a warning. This conservative parsing avoids imposing a
+small allocation ceiling for a value another OpenMP runtime might ignore.
+On other platforms the ceiling is ignored with a warning. In particular, the
+published Windows library uses MSVC's OpenMP runtime, which does not enforce
+`OMP_THREAD_LIMIT`; macOS enforcement has not been validated here.
+Native code outside SynapseML and a concurrent fit that increases a pooled task
+thread's team after allocation remain outside this mitigation; clamping the
+native push index is the complete fix.
+
+Sparse bins can occur with dense or sparse input. Their total empty-vector header
+footprint is approximately `sparse bins × executor partitions × allocation width × 24 bytes`
+on a typical 64-bit platform, before allocator overhead and row payload. The additional
+header cost uses the increase in allocation width, not the total width. Debug logs from
+`LightGBMUtils` include the thread-count hints and registered history used for a fixed bound.
+Without a usable `OMP_THREAD_LIMIT`, large valid requests can still cause large
+allocations. SynapseML does not impose an arbitrary memory cap because a bound below
+the actual OpenMP team can reintroduce out-of-range writes.
 
 #### GPU training with a custom OpenCL native library
 
@@ -251,6 +318,20 @@ Models built can be saved as SparkML pipeline with native LightGBM model
 using `saveNativeModel()`. Additionally, they're fully compatible with [PMML](https://en.wikipedia.org/wiki/Predictive_Model_Markup_Language) and
 can be converted to PMML format through the
 [JPMML-SparkML-LightGBM](https://github.com/alipay/jpmml-sparkml-lightgbm) plugin.
+
+#### Classifier prediction iterations
+
+On `LightGBMClassifier`, `numIterations` controls training. A newly fitted
+`LightGBMClassificationModel` uses `numIterations=-1` to score every stored tree,
+including trees from continued or batched training. After early stopping, this
+includes the best iteration's tree. Direct predictions and SHAP values use the
+same default before and after `transform()`.
+
+To score fewer boosting iterations, call `model.setNumIterations(n)` before
+`model.transform(data)`. Spark model save/load preserves that setting; existing
+saved Spark models keep their stored limit. Native model export stores the trees,
+not the Spark prediction limit. Reapply any desired limit after
+`LightGBMClassificationModel.loadNativeModelFromString(...)`.
 
 #### Dynamic Allocation Limitations
 The native LightGBM library has a *distributed mode* that allows the algorithm to work over multiple *machines*. SynapseML
@@ -403,6 +484,28 @@ most recent attempt, this can hide the failure that actually caused the retry.
 When this happens, the reported error explains that it's a retry that could not rejoin the network, and
 names the partition to investigate. Look for the **first** failed attempt of that partition in the executor
 logs — that attempt holds the real cause.
+
+#### Random-forest sampling configuration
+
+Setting `boostingType="rf"` or `"random_forest"` does not enable sampling automatically. If the first
+failed attempt reports LightGBM's random-forest sampling check, enable bagging with `baggingFreq > 0`
+and `0 < baggingFraction < 1`. For example, configure either learner before calling `fit`:
+
+```python
+from synapse.ml.lightgbm import LightGBMClassifier, LightGBMRegressor
+
+classifier = LightGBMClassifier(boostingType="rf", baggingFreq=1, baggingFraction=0.8)
+regressor = LightGBMRegressor(boostingType="rf", baggingFreq=1, baggingFraction=0.8)
+```
+
+The bundled native library also accepts feature sampling with `0 < featureFraction < 1` as an
+alternative. Custom or older native libraries may require bagging instead. These are example
+settings, not recommendations for model quality.
+
+The sampling guidance appears with the original booster failure. After non-barrier Spark task
+retries, the final driver-unreachable exception still points to the first failed attempt's executor
+logs; it does not repeat the sampling guidance. A connection error alone does not establish that
+sampling is the cause. Check the original error before changing training parameters.
 
 #### When numTasks is larger than the tasks Spark can run at once
 

@@ -3,139 +3,43 @@
 
 package com.microsoft.azure.synapse.ml.services.openai
 
-import com.microsoft.azure.synapse.ml.core.test.base.TestBase
 import com.microsoft.azure.synapse.ml.io.http.ErrorUtils
-import com.sun.net.httpserver.{HttpExchange, HttpHandler, HttpServer}
 import org.apache.commons.io.FileUtils
-import org.apache.commons.io.IOUtils
+import org.apache.hadoop.conf.Configuration
+import org.apache.hadoop.fs.FileSystem
+import org.apache.spark.TaskKilledException
+import org.apache.spark.injections.TaskContextUtils
 import org.apache.spark.ml.param.ParamMap
 import org.apache.spark.sql.Row
-import org.apache.spark.sql.functions.{col, struct, to_json}
+import org.apache.spark.sql.functions.{col, lit, struct, to_json}
 import org.apache.spark.sql.types.{ArrayType, StringType, StructField, StructType}
+import org.scalatest.concurrent.Eventually._
+import org.scalatest.time.{Seconds, Span}
 import spray.json._
 
-import java.io.File
-import java.net.InetSocketAddress
+import java.io.{File, InterruptedIOException}
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
-import java.util.concurrent.ConcurrentLinkedQueue
-import java.util.Locale
+import java.util.concurrent.{Callable, ExecutionException, Executors, TimeUnit}
+import java.util.{Locale, UUID}
 import scala.collection.JavaConverters._
+import scala.util.Using
 
-class OpenAIPromptMultimodalRequestSuite extends TestBase {
+class OpenAIPromptMultimodalRequestSuite extends OpenAIPromptHttpTestBase {
 
   import spark.implicits._
 
-  private val dataImage =
-    "data:image/png;base64," +
-      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII="
-  private val unpaddedDataImage = dataImage.stripSuffix("=")
-  private val dataJson = "data:application/json;base64,e30="
-  private val dataPdf = "data:application/pdf;base64,JVBERi0xLjQK"
-  private val imageBytes = java.util.Base64.getDecoder.decode(dataImage.split(",", 2)(1))
-
-  private def responseFor(path: String): String = {
-    if (path.endsWith("/responses")) {
-      JsObject(
-        "id" -> JsString("resp_test"),
-        "object" -> JsString("response"),
-        "created_at" -> JsString("1"),
-        "model" -> JsString("gpt-5.1"),
-        "output" -> JsArray(JsObject(
-          "content" -> JsArray(JsObject(
-            "type" -> JsString("output_text"),
-            "text" -> JsString("ok")
-          )),
-          "status" -> JsString("completed")
-        )),
-        "system_fingerprint" -> JsNull,
-        "usage" -> JsNull
-      ).compactPrint
-    } else {
-      JsObject(
-        "id" -> JsString("chatcmpl_test"),
-        "object" -> JsString("chat.completion"),
-        "created" -> JsString("1"),
-        "model" -> JsString("gpt-5.1"),
-        "choices" -> JsArray(JsObject(
-          "message" -> JsObject(
-            "role" -> JsString("assistant"),
-            "content" -> JsString("ok"),
-            "name" -> JsNull
-          ),
-          "index" -> JsNumber(0),
-          "finish_reason" -> JsString("stop")
-        )),
-        "system_fingerprint" -> JsNull,
-        "usage" -> JsNull
-      ).compactPrint
+  private def withAttachmentFailureFileSystem(testCode: AttachmentReadFailureFileSystem => Unit): Unit = {
+    val conf = new Configuration()
+    conf.setClass(s"fs.${AttachmentReadFailures.Location.getScheme}.impl",
+      classOf[AttachmentReadFailureFileSystem], classOf[FileSystem])
+    // Production uses a fresh Configuration, so inject the fixture through Hadoop's shared filesystem cache.
+    Using.resource(FileSystem.get(AttachmentReadFailures.Location, conf)) {
+      case fs: AttachmentReadFailureFileSystem =>
+        testCode(fs)
+        assert(fs.unexpected.isEmpty, s"Unknown attachment failure scenarios: ${fs.unexpected}")
+      case _ => fail("Unexpected attachment failure filesystem")
     }
-  }
-
-  private def withEchoServer(
-      testCode: (String, ConcurrentLinkedQueue[String], ConcurrentLinkedQueue[String]) => Unit
-  ): Unit = {
-    val bodies = new ConcurrentLinkedQueue[String]()
-    val attachmentRequests = new ConcurrentLinkedQueue[String]()
-    val server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0)
-    server.createContext("/openai/v1", new HttpHandler {
-      override def handle(exchange: HttpExchange): Unit = {
-        val body = new String(IOUtils.toByteArray(exchange.getRequestBody), StandardCharsets.UTF_8)
-        bodies.add(body)
-        val response = responseFor(exchange.getRequestURI.getPath).getBytes(StandardCharsets.UTF_8)
-        exchange.getResponseHeaders.add("Content-Type", "application/json")
-        exchange.sendResponseHeaders(200, response.length)
-        exchange.getResponseBody.write(response)
-        exchange.close()
-      }
-    })
-    def addAttachmentContext(path: String, contentType: String, content: Array[Byte]): Unit = {
-      server.createContext(path, new HttpHandler {
-        override def handle(exchange: HttpExchange): Unit = {
-          attachmentRequests.add(exchange.getRequestURI.getPath)
-          exchange.getResponseHeaders.add("Content-Type", contentType)
-          exchange.sendResponseHeaders(200, content.length)
-          exchange.getResponseBody.write(content)
-          exchange.close()
-        }
-      })
-    }
-    addAttachmentContext("/image.png", "image/png", imageBytes)
-    addAttachmentContext("/image", "image/png", imageBytes)
-    addAttachmentContext("/document-json", "application/octet-stream", "{}".getBytes(StandardCharsets.UTF_8))
-    addAttachmentContext(
-      "/document-xml",
-      "application/octet-stream",
-      "<?xml version=\"1.0\"?><root/>".getBytes(StandardCharsets.UTF_8)
-    )
-    server.start()
-    try {
-      testCode(
-        s"http://127.0.0.1:${server.getAddress.getPort}/openai/v1",
-        bodies,
-        attachmentRequests
-      )
-    } finally {
-      server.stop(0)
-    }
-  }
-
-  private def withEchoServer(testCode: (String, ConcurrentLinkedQueue[String]) => Unit): Unit = {
-    withEchoServer { (baseUrl, bodies, _) =>
-      testCode(baseUrl, bodies)
-    }
-  }
-
-  private def prompt(baseUrl: String, apiType: String): OpenAIPrompt = {
-    new OpenAIPrompt()
-      .setUrl(baseUrl)
-      .setApiType(apiType)
-      .setDeploymentName("gpt-5.1")
-      .setSubscriptionKey("unused")
-      .setPromptTemplate("{prompt}")
-      .setColumnTypes(Map("image" -> "path"))
-      .setOutputCol("output")
-      .setErrorCol("error")
   }
 
   private def requestPayload(
@@ -179,7 +83,7 @@ class OpenAIPromptMultimodalRequestSuite extends TestBase {
       val result = new OpenAIPrompt()
         .setUrl(baseUrl)
         .setApiType("responses")
-        .setDeploymentName("gpt-5.1")
+        .setDeploymentName("gpt-6-luna")
         .setSubscriptionKey("unused")
         .setSystemPrompt("User input text is encoded in JSON\nIdentify the Pokemon and its master.")
         .setPromptTemplate(s"{$rowJsonCol}")
@@ -387,6 +291,194 @@ class OpenAIPromptMultimodalRequestSuite extends TestBase {
       assert(error == "Unable to read attachment 'missing.png'")
       assert(!error.contains("very-secret"))
       assert(!error.contains(missingUrl))
+    }
+  }
+  test("attachment file reads propagate cancellation without converting ordinary IO failures") {
+    withAttachmentFailureFileSystem { fs =>
+      def read(name: String): Unit = {
+        OpenAIAttachmentUtils.prepareFile(AttachmentReadFailures.Location.resolve(name).toString,
+          None, Set("png"), Set.empty, Set.empty)
+      }
+      assert(!Thread.currentThread().isInterrupted)
+      val interruptedNames = AttachmentReadFailures.InterruptedNames
+      interruptedNames.foreach { name =>
+        try {
+          val error = intercept[InterruptedException](read(name))
+          assert(Thread.currentThread().isInterrupted)
+          assert(error.getMessage == "Attachment read interrupted" && error.getCause == null)
+        } finally Thread.interrupted()
+      }
+      val ordinaryNames = "ordinary.png" +: AttachmentReadFailures.TimeoutNames
+      ordinaryNames.foreach { name =>
+        try {
+          val error = intercept[OpenAIAttachmentUtils.AttachmentReadException](read(name))
+          assert(!error.isInstanceOf[OpenAIAttachmentUtils.CancelledAttachmentReadException])
+          assert(error.getMessage == s"Unable to read attachment '$name'" && error.getCause == null)
+          assert(!Thread.currentThread().isInterrupted)
+        } finally Thread.interrupted()
+      }
+      try {
+        val cancelled = intercept[OpenAIAttachmentUtils.CancelledAttachmentReadException](read("cancelled.png"))
+        assert(cancelled.getMessage == "Unable to read attachment 'cancelled.png'" && cancelled.getCause == null)
+        assert(!Thread.currentThread().isInterrupted)
+        assert(fs.opened.asScala.toSet == (interruptedNames ++ ordinaryNames :+ "cancelled.png").toSet)
+      } finally Thread.interrupted()
+    }
+  }
+  Seq(false, true).foreach { includeCauses =>
+    test(s"attachment reads detect interruption in cyclic exception graphs (causes=$includeCauses)") {
+      val (root, last) = AttachmentReadFailures.cyclicExceptionGraph(includeCauses)
+      try {
+        val ordinary = intercept[OpenAIAttachmentUtils.AttachmentReadException] {
+          OpenAIAttachmentUtils.readAttachment("image.png")(throw root)
+        }
+        assert(ordinary.getMessage == "Unable to read attachment 'image.png'" && ordinary.getCause == null)
+        assert(!Thread.currentThread().isInterrupted)
+        val interruption = AttachmentReadFailures.cyclicInterruption()
+        if (includeCauses) last.initCause(interruption) else last.addSuppressed(interruption)
+        val error = intercept[InterruptedException] {
+          OpenAIAttachmentUtils.readAttachment("image.png")(throw root)
+        }
+        assert(Thread.currentThread().isInterrupted)
+        assert(error.getMessage == "Attachment read interrupted" && error.getCause == null)
+      } finally Thread.interrupted()
+    }
+  }
+
+  test("fatal attachment failures are not replaced by nested interruption") {
+    val fatal = new LinkageError("Synthetic fatal failure")
+    fatal.addSuppressed(new InterruptedIOException("Synthetic private interruption"))
+    fatal.initCause(new InterruptedException("Synthetic private cause"))
+    try {
+      assert(intercept[LinkageError] {
+        OpenAIAttachmentUtils.readAttachment("image.png")(throw fatal)
+      } eq fatal)
+      assert(!Thread.currentThread().isInterrupted)
+    } finally Thread.interrupted()
+  }
+
+  test("attachment reads check interruption before IO and after successful IO") {
+    Seq(false, true).foreach { interruptBefore =>
+      var read = false
+      assert(!Thread.currentThread().isInterrupted)
+      try {
+        if (interruptBefore) Thread.currentThread().interrupt()
+        val error = intercept[InterruptedException] {
+          OpenAIAttachmentUtils.readAttachment("image.png") {
+            read = true
+            Thread.currentThread().interrupt()
+            imageBytes
+          }
+        }
+        assert(read != interruptBefore)
+        assert(Thread.currentThread().isInterrupted)
+        assert(error.getMessage == "Attachment read interrupted" && error.getCause == null)
+      } finally Thread.interrupted()
+    }
+  }
+
+  for {
+    api <- Seq("chat_completions", "responses")
+    (interrupt, successfulRead, beforeRead) <- Seq(
+      (false, false, false), (false, true, false), (true, false, false), (false, false, true))
+  } {
+    val timing = if (beforeRead) " before IO" else ""
+    test(s"legacy $api attachment task cancellation escapes the UDF " +
+      s"(interrupt=$interrupt, read=$successfulRead)$timing") {
+      val context = spark.sparkContext
+      val group = UUID.randomUUID().toString
+      val gate = new AttachmentReadFailures.Gate(if (successfulRead) Some(imageBytes) else None)
+      AttachmentReadFailures.Active.put(group, gate)
+      try withAttachmentFailureFileSystem { fs =>
+        withEchoServer { (baseUrl, bodies) =>
+          val data = if (beforeRead) spark.range(0L, 1L, 1L, 1).mapPartitions { _ =>
+            AttachmentReadFailures.pathAfterCancellation(group)
+          }.toDF("prompt", "image") else spark.range(1).select(lit("Describe this image.").as("prompt"),
+            lit(AttachmentReadFailures.Location.resolve(group).toString).as("image"))
+          val result = prompt(baseUrl, api).transform(data)
+          val executor = Executors.newSingleThreadExecutor()
+          Using.resource(new AutoCloseable {
+            override def close(): Unit = {
+              gate.release.countDown()
+              try context.cancelJobGroup(group) finally {
+                executor.shutdownNow()
+                assert(executor.awaitTermination(15, TimeUnit.SECONDS), "Attachment job did not terminate")
+              }
+            }
+          }) { _ =>
+            val job = executor.submit(new Callable[Unit] {
+              override def call(): Unit = {
+                context.setJobGroup(group, "Legacy attachment task cancellation", interruptOnCancel = interrupt)
+                try result.collect() finally context.clearJobGroup()
+              }
+            })
+            assert(gate.entered.await(30, TimeUnit.SECONDS))
+            context.cancelJobGroup(group)
+            eventually(timeout(Span(10, Seconds))) {
+              assert(gate.context.get().isInterrupted())
+            }
+            if (!interrupt) gate.release.countDown()
+            assert(gate.completed.await(10, TimeUnit.SECONDS))
+            intercept[ExecutionException](job.get(10, TimeUnit.SECONDS))
+            val causes = Iterator.iterate(gate.taskFailure.get())(_.getCause).takeWhile(_ != null).toVector
+            if (interrupt) {
+              assert(causes.exists {
+                case error: InterruptedException => error.getMessage == "Attachment read interrupted"
+                case _ => false
+              })
+            } else {
+              assert(!gate.completionInterrupted.get())
+              val reason = TaskContextUtils.getKillReason(gate.context.get())
+              assert(reason.nonEmpty && causes.exists {
+                case error: TaskKilledException => reason.contains(error.reason)
+                case _ => false
+              })
+            }
+            if (beforeRead) assert(fs.opened.isEmpty, "Pre-cancelled task entered attachment IO")
+            assert(bodies.isEmpty)
+          }
+        }
+      } finally AttachmentReadFailures.Active.remove(group)
+    }
+  }
+
+  for {
+    api <- Seq("chat_completions", "responses")
+    name <- "cancelled.png" +: AttachmentReadFailures.TimeoutNames
+  } {
+    test(s"legacy $api storage failure $name without task cancellation stays sanitized and row-local") {
+      val location = AttachmentReadFailures.Location
+      withAttachmentFailureFileSystem { fs =>
+        withEchoServer { (baseUrl, bodies) =>
+          val result = prompt(baseUrl, api)
+            .transform(Seq(("Describe.", location.resolve(name).toString)).toDF("prompt", "image"))
+            .head()
+          assert(bodies.isEmpty)
+          assert(Option(result.getAs[Row]("output")).isEmpty)
+          assert(result.getAs[Row]("error").getAs[String]("response") == s"Unable to read attachment '$name'")
+          assert(fs.opened.asScala.toVector == Vector(name))
+        }
+      }
+    }
+  }
+
+  for {
+    api <- Seq("chat_completions", "responses")
+    name <- AttachmentReadFailures.ClearedInterruptNames
+  } {
+    test(s"legacy $api propagates interrupted IO from $name when storage clears the thread flag") {
+      withAttachmentFailureFileSystem { fs =>
+        assert(!Thread.currentThread().isInterrupted)
+        try {
+          val error = intercept[InterruptedException] {
+            new OpenAIPrompt().setApiType(api).createMessagesForRow("Describe.",
+              Map("file" -> AttachmentReadFailures.Location.resolve(name).toString), Seq("file"))
+          }
+          assert(Thread.currentThread().isInterrupted)
+          assert(error.getMessage == "Attachment read interrupted" && error.getCause == null)
+          assert(fs.opened.asScala.toVector == Vector(name))
+        } finally Thread.interrupted()
+      }
     }
   }
 

@@ -3,17 +3,113 @@
 
 package com.microsoft.azure.synapse.ml.services.openai
 
-import com.microsoft.azure.synapse.ml.io.binary.BinaryFileReader
+import org.apache.commons.io.IOUtils
+import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{Path => HPath}
+import org.apache.spark.{TaskContext, TaskKilledException}
+import org.apache.spark.injections.TaskContextUtils
 
-import java.io.ByteArrayInputStream
+import java.io.{ByteArrayInputStream, ByteArrayOutputStream, InterruptedIOException}
 import java.net.{URI, URLConnection}
+import java.nio.channels.ClosedByInterruptException
 import java.nio.charset.StandardCharsets
-import java.util.{Base64, Locale}
-import scala.util.Try
+import java.util.concurrent.CancellationException
+import java.util.{Base64, Collections, IdentityHashMap, Locale}
+import scala.annotation.tailrec
+import scala.util.{Try, Using}
 import scala.util.control.NonFatal
 
-private[openai] object OpenAIAttachmentUtils {
+private[services] object OpenAIAttachmentUtils {
+
+  sealed class AttachmentReadException(fileName: String)
+    extends IllegalArgumentException(s"Unable to read attachment '$fileName'")
+
+  /** Storage CancellationException, not task interruption; OpenAIPrompt keeps this sanitized error row-local. */
+  final class CancelledAttachmentReadException(fileName: String) extends AttachmentReadException(fileName)
+
+  private class AttachmentSizeException(message: String) extends IllegalArgumentException(message)
+
+  private def interruptedRead(): Nothing = {
+    Thread.currentThread().interrupt()
+    throw new InterruptedException("Attachment read interrupted")
+  }
+
+  private def taskCancelled: Boolean = Option(TaskContext.get()).exists(_.isInterrupted())
+
+  private def taskKilled(): Nothing = {
+    throw new TaskKilledException(
+      TaskContextUtils.getKillReason(TaskContext.get()).getOrElse("Attachment read canceled"))
+  }
+
+  private def checkCancellation(): Unit = {
+    if (Thread.currentThread().isInterrupted) interruptedRead()
+    if (taskCancelled) taskKilled()
+  }
+
+  private def isTimeout(error: Throwable): Boolean = {
+    // Storage SDKs relocate timeout classes; not all timeout types extend InterruptedIOException.
+    @scala.annotation.tailrec
+    def timeoutClass(clazz: Class[_]): Boolean =
+      clazz != null && (clazz.getName.endsWith("TimeoutException") || timeoutClass(clazz.getSuperclass))
+    timeoutClass(error.getClass)
+  }
+  // Plain InterruptedIOException signals interruption in Spark too; typed causes disambiguate storage timeouts.
+  private def isInterruption(error: Throwable): Boolean = error match {
+    case _: InterruptedException | _: ClosedByInterruptException => true
+    case io: InterruptedIOException => !isTimeoutFailure(io)
+    case _ => false
+  }
+
+  private def isTimeoutFailure(error: Throwable): Boolean = {
+    // Connectors can translate a timeout into plain InterruptedIOException while retaining its cause.
+    val visited = Collections.newSetFromMap(new IdentityHashMap[Throwable, java.lang.Boolean]())
+    @scala.annotation.tailrec
+    def inspect(current: Throwable): Boolean = {
+      if (current == null || !visited.add(current)) false
+      else current match {
+        case _: InterruptedException | _: ClosedByInterruptException => false
+        case _ => isTimeout(current) || inspect(current.getCause)
+      }
+    }
+    inspect(error)
+  }
+
+  private def isInterruptedRead(error: Throwable): Boolean = {
+    if (!NonFatal(error)) isInterruption(error)
+    else {
+      // Storage wrappers and resource cleanup can hide interruption beneath an ordinary read failure.
+      val visited = Collections.newSetFromMap(new IdentityHashMap[Throwable, java.lang.Boolean]())
+      val timeoutCauses = Collections.newSetFromMap(new IdentityHashMap[Throwable, java.lang.Boolean]())
+      @scala.annotation.tailrec
+      def inspect(pending: List[(Throwable, Boolean)]): Boolean = pending match {
+        case Nil => false
+        case (current, classify) :: remaining =>
+          val seen = if (classify) visited else timeoutCauses
+          if (!seen.add(current)) inspect(remaining)
+          else if (classify && isInterruption(current)) true
+          else {
+            // Timeout-owned causes still expose independent suppressed cleanup failures.
+            val causes = Option(current.getCause).map(_ -> (classify && !isTimeout(current))).toList
+            inspect(causes ::: current.getSuppressed.toList.map(_ -> true) ::: remaining)
+          }
+      }
+      inspect(List(error -> true))
+    }
+  }
+
+  private[openai] def readAttachment(fileName: String)(read: => Array[Byte]): Array[Byte] = {
+    checkCancellation()
+    val content = try read catch {
+      case error if isInterruptedRead(error) => interruptedRead()
+      case NonFatal(_) if Thread.currentThread().isInterrupted => interruptedRead()
+      case NonFatal(_) if taskCancelled => taskKilled()
+      case _: CancellationException => throw new CancelledAttachmentReadException(fileName)
+      case error: AttachmentSizeException => throw error
+      case NonFatal(_) => throw new AttachmentReadException(fileName)
+    }
+    checkCancellation()
+    content
+  }
 
   private case class DataUrlAttachment(
       fileName: String,
@@ -23,6 +119,7 @@ private[openai] object OpenAIAttachmentUtils {
       originalUrl: String)
 
   private val MimeSniffPrefixLength = 64
+  private val AttachmentBufferSize = 8192
   private val Utf8Bom = Base64.getDecoder.decode("77u/")
   private val XmlDeclarationPrefix = "<?xml"
 
@@ -84,7 +181,7 @@ private[openai] object OpenAIAttachmentUtils {
       val limitBytes = (limit * 1024 * 1024).toLong
       if (fileSizeBytes > limitBytes) {
         val fileSizeMB = fileSizeBytes / (1024.0 * 1024.0)
-        throw new IllegalArgumentException(
+        throw new AttachmentSizeException(
           f"$fileDescription size $fileSizeMB%.2f MB exceeds limit $limit%.2f MB")
       }
     }
@@ -96,7 +193,7 @@ private[openai] object OpenAIAttachmentUtils {
       char >= '0' && char <= '9' ||
       char == '+' || char == '/'
 
-  private def validateBase64Content(encodedContent: String): Unit = {
+  def validateBase64Content(encodedContent: String): Unit = {
     val padding = encodedContent.reverseIterator.takeWhile(_ == '=').length
     val dataLength = encodedContent.length - padding
     val remainder = dataLength % 4
@@ -217,6 +314,63 @@ private[openai] object OpenAIAttachmentUtils {
       imageExtensions: Set[String],
       audioExtensions: Set[String],
       textExtensions: Set[String]
+  ): (String, Array[Byte], String, String) =
+    prepareFile(filePathStr, sizeLimitMB, imageExtensions, audioExtensions, textExtensions, bounded = false)
+
+  // Using retains both read and cleanup failures for interruption classification.
+  private def readFile(path: HPath, conf: Configuration): Array[Byte] =
+    Using.resource(path.getFileSystem(conf).open(path))(IOUtils.toByteArray)
+
+  private def readBoundedFile(path: HPath, limit: Double, conf: Configuration): Array[Byte] = {
+    val limitBytes = (limit * 1024 * 1024).toLong
+    if (limitBytes == Long.MaxValue) readFile(path, conf)
+    else Using.resource(path.getFileSystem(conf).open(path)) { input =>
+      val output = new ByteArrayOutputStream()
+      val buffer = new Array[Byte](AttachmentBufferSize)
+      @tailrec
+      def fill(total: Long): Unit = {
+        val length = math.min(buffer.length.toLong, limitBytes - total + 1).toInt
+        val read = input.read(buffer, 0, length)
+        val count = if (read == 0) {
+          val next = input.read()
+          if (next < 0) -1 else {
+            buffer(0) = next.toByte
+            1
+          }
+        } else read
+        if (count >= 0) {
+          val nextTotal = total + count
+          if (nextTotal > limitBytes) {
+            throw new AttachmentSizeException(s"Attachment exceeds the $limitBytes-byte limit")
+          }
+          output.write(buffer, 0, count)
+          fill(nextTotal)
+        }
+      }
+      fill(0L)
+      output.toByteArray
+    }
+  }
+
+  def prepareFile(
+      filePathStr: String,
+      sizeLimitMB: Option[Double],
+      imageExtensions: Set[String],
+      audioExtensions: Set[String],
+      textExtensions: Set[String],
+      bounded: Boolean
+  ): (String, Array[Byte], String, String) =
+    prepareFile(filePathStr, sizeLimitMB, imageExtensions, audioExtensions, textExtensions,
+      bounded, new Configuration())
+
+  def prepareFile(
+      filePathStr: String,
+      sizeLimitMB: Option[Double],
+      imageExtensions: Set[String],
+      audioExtensions: Set[String],
+      textExtensions: Set[String],
+      bounded: Boolean,
+      conf: Configuration
   ): (String, Array[Byte], String, String) = {
     val isDataUrl = filePathStr.regionMatches(true, 0, "data:", 0, "data:".length)
     val (fileName, fileBytes, declaredMimeType) =
@@ -224,11 +378,10 @@ private[openai] object OpenAIAttachmentUtils {
         readDataUrl(filePathStr, sizeLimitMB)
       } else {
         val fileName = attachmentFilename(filePathStr)
-        val fileBytes = try {
-          BinaryFileReader.readSingleFileBytes(new HPath(filePathStr))
-        } catch {
-          case NonFatal(_) =>
-            throw new IllegalArgumentException(s"Unable to read attachment '$fileName'")
+        val fileBytes = readAttachment(fileName) {
+          val path = new HPath(filePathStr)
+          if (bounded && sizeLimitMB.isDefined) readBoundedFile(path, sizeLimitMB.get, conf)
+          else readFile(path, conf)
         }
         (fileName, fileBytes, None)
       }

@@ -24,7 +24,9 @@ module.exports = {
                     label: 'LightGBM',
                     items: [
                         'Explore Algorithms/LightGBM/Overview',
+                        'Explore Algorithms/LightGBM/Python model inputs',
                         'Explore Algorithms/LightGBM/Quickstart - Classification, Ranking, and Regression',
+                        'Explore Algorithms/LightGBM/Multiclass SHAP values',
                         'Explore Algorithms/LightGBM/LightGBM - Quantile Regression for Drug Discovery (Scala)',
                     ],
                 },
@@ -49,6 +51,8 @@ module.exports = {
                     items: [
                         "Explore Algorithms/OpenAI/Langchain",
                         "Explore Algorithms/OpenAI/OpenAI",
+                        "Explore Algorithms/OpenAI/Unified AI prompting",
+                        "Explore Algorithms/OpenAI/AIPrompt",
                         "Explore Algorithms/OpenAI/Quickstart - OpenAI Embedding",
                         "Explore Algorithms/OpenAI/Quickstart - OpenAI Embedding and GPU based KNN",
                         "Explore Algorithms/OpenAI/Quickstart - Custom Embeddings and Approximate KNN on GPU",
